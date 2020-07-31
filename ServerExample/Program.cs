@@ -1,6 +1,8 @@
 ﻿using EasyWebsockets;
 using EasyWebsockets.Classes;
 using System;
+using System.Net;
+using System.Security.Authentication;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -15,7 +17,15 @@ namespace ServerExample
 
 		private async Task MainAsync()
 		{
-			server = new WebSocketServer("192.168.1.107", 443, @"C:\Users\User\Desktop\cert.pfx", "asdf");
+			var config = new TlsConfig(
+				mainkey: "C:/Users/User/Desktop/cert1.pfx",
+				privkey: "C:/Certbot/live/socket.gg/privkey.pem",
+				version: SslProtocols.Tls13 | SslProtocols.Tls12 | SslProtocols.Tls
+			);
+
+			config.LoadCertFromPfx();
+
+			server = new WebSocketServer("192.168.2.165", 25565, config);
 
 			server.OnConnect += OnConnect; ;
 			server.OnReceive += OnReceive; ;
@@ -27,7 +37,8 @@ namespace ServerExample
 
 		private Task OnLog(IWSLogMessage arg)
 		{
-			Console.WriteLine($"{arg.Process}({arg.Thread}) at {arg.Time}] {arg.Content}");
+			if(arg.Type != WSLogMessageType.Receive)
+				Console.WriteLine($"{arg.Process}({arg.Thread}) at {arg.Time}] {arg.Content}");
 			return Task.CompletedTask;
 		}
 
@@ -40,9 +51,9 @@ namespace ServerExample
 			return Task.CompletedTask;
 		}
 
-		private Task OnConnect(WebSocketInstance arg)
+		private async Task OnConnect(WebSocketInstance arg)
 		{
-			return Task.CompletedTask;
+			await arg.SendAsync(Encoding.UTF8.GetBytes("NIGGER"), WSOpcodeType.Text);
 		}
 	}
 }

@@ -1,18 +1,19 @@
 ﻿using System;
 using System.Net.Security;
 using System.Net.Sockets;
-using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
 using System.Security.Authentication;
 using System.Text;
 using EasyWebsockets.Helpers;
 using EasyWebsockets.Classes;
+using System.Net.WebSockets;
+using System.Threading;
 
 namespace EasyWebsockets
 {
 	public class WebSocketInstance : IAsyncDisposable
 	{
-		private readonly X509Certificate2? cert;
+		private readonly TlsConfig? cert;
 		private readonly TcpClient client;
 		private readonly int? readTimeOut;
 		private SslStream? secureStream;
@@ -36,10 +37,10 @@ namespace EasyWebsockets
 		/// <param name="client">The <see cref="TcpClient"/> to be upgraded to a websocket connection.</param>
 		/// <param name="timeout">The timeout for receiving messages.</param>
 		/// <param name="cert">The X509 certificate for secure connections.</param>
-		public WebSocketInstance(TcpClient client, int? timeout = null, X509Certificate2? cert = null)
+		public WebSocketInstance(TcpClient client, int? timeout = null, TlsConfig? cert = null)
 		{
 			this.client = client;
-			this.secure = cert != null;
+			this.secure = cert != null && cert.Certificate != null;
 			this.cert = cert;
 			readTimeOut = timeout;
 		}
@@ -48,8 +49,8 @@ namespace EasyWebsockets
 		/// </summary>
 		/// <param name="data">The data to be sent.</param>
 		/// <param name="msgType">The type of message sent.</param>
-		/// <returns></returns>
-		public virtual async Task SendAsync(ArraySegment<byte> data, WSOpcodeType msgType)
+		/// <returns>Completed Task</returns>
+		public virtual async Task SendAsync(byte[] data, WSOpcodeType msgType)
 		{
 			if (!handShaked)
 				return;
@@ -57,18 +58,17 @@ namespace EasyWebsockets
 				return;
 			if (closed)
 				return;
-			if (data.Array == null)
-				throw new ArgumentNullException($"Inner array of argument \"{nameof(data)}\" cannot be equal to null.");
-			byte[] d = ToFrameData(data.Array, msgType);
+			//if (data.Array == null)
+				//throw new ArgumentNullException($"Inner array of argument \"{nameof(data)}\" cannot be equal to null.");
+			byte[] d = WSArrayHelpers.ToFrameData(data, msgType);
 
 			if (secure)
 				await secureStream.WriteAsync(d, 0, d.Length);
 			else
 				await client.GetStream().WriteAsync(d, 0, d.Length);
 
-			if (msgType == WSOpcodeType.Close)
+			if(msgType == WSOpcodeType.Close && !disposed)
 			{
-				closed = true;
 				await DisposeAsync();
 			}
 		}
@@ -76,7 +76,7 @@ namespace EasyWebsockets
 		/// Receives a WebSocket packet from the client.
 		/// </summary>
 		/// <returns>Returns the external data, the status code of closing the connection (if there is one) and the opcode type of the message.</returns>
-		public async Task<Tuple<byte[], ushort?, WSOpcodeType>?> ReceiveAsync()
+		public async Task<Tuple<byte[], WebSocketCloseStatus, WSOpcodeType>?> ReceiveAsync()
 		{
 			if (!handShaked)
 				return null;
@@ -89,75 +89,32 @@ namespace EasyWebsockets
 			if (secure)
 			{
 				int i = await secureStream.ReadAsync(data, 0, data.Length);
-				Console.WriteLine("booyahhhhhhh");
-				data = SubArray(data, 0, i);
+				data = data.SubArray(0, i);
 			}
 			else
 			{
 				int i = await client.GetStream().ReadAsync(data, 0, data.Length);
-				Console.WriteLine("booyah");
-				data = SubArray(data, 0, i);
+				data = data.SubArray(0, i);
 			}
-			var t = ConvertFrame(data);
+			;
+			var t = WSArrayHelpers.ConvertFrame(data);
 
 			if (t == null)
 			{
 				await DisposeAsync();
+				return null;
 			}
-			return new Tuple<byte[], ushort?, WSOpcodeType>(t.Item1, t.Item2, t.Item4);
+			if(t.Item4 == WSOpcodeType.Close)
+			{
+				await CloseAsync(WebSocketCloseStatus.Empty, null);
+				await DisposeAsync(false);
+			}
+			return new Tuple<byte[], WebSocketCloseStatus, WSOpcodeType>(t.Item1, t.Item2, t.Item4);
 		}
-		private static byte[] ToFrameData(ArraySegment<byte> data, WSOpcodeType msgType)
+		
+		public virtual Task CloseAsync(WebSocketCloseStatus closeStatus, string? statusDescription)
 		{
-			var arr = data.Array;
-			if (arr == null)
-				throw new ArgumentNullException($"Inner array of argument \"{nameof(data)}\" cannot be equal to null.");
-			byte op = (byte)msgType;
-			byte len = 125;
-			int offset = 2;
-			byte[] retval;
-
-			if (arr.Length > 125 && arr.Length < ushort.MaxValue)
-			{
-				len = 126;
-				offset = 4;
-				retval = new byte[arr.Length + offset - 1];
-				var b = BitConverter.GetBytes((ushort)arr.Length);
-				retval[0] = op;
-				retval[1] = len;
-				retval[2] = b[0];
-				retval[3] = b[1];
-
-			}
-			else if (arr.Length <= 125)
-			{
-				retval = new byte[arr.Length + offset - 1];
-				retval[0] = op;
-				retval[1] = len;
-			}
-			else
-			{
-				len = 127;
-				offset = 6;
-				retval = new byte[arr.Length + offset - 1];
-				var b = BitConverter.GetBytes(arr.Length);
-				retval[0] = op;
-				retval[1] = len;
-				retval[2] = b[0];
-				retval[3] = b[1];
-				retval[4] = b[2];
-				retval[5] = b[3];
-			}
-
-			for (int i = 0; i < arr.Length; i++)
-			{
-				retval[offset + i] = arr[i];
-			}
-
-			return retval;
-		}
-		public virtual Task CloseAsync()
-		{
-			return SendAsync(new ArraySegment<byte>(new byte[0]), WSOpcodeType.Close);
+			return SendAsync(BitConverter.GetBytes((ushort)closeStatus).Join(Encoding.UTF8.GetBytes(statusDescription ?? "")), WSOpcodeType.Close);
 		}
 		/// <summary>
 		/// Initiates a handshake with the TCP client.
@@ -173,16 +130,33 @@ namespace EasyWebsockets
 			{
 				secureStream = new SslStream(stream, false);
 
+
+				try
+				{
+					await secureStream.AuthenticateAsServerAsync(
+							cert.Certificate,
+							enabledSslProtocols: cert.SslVersion,
+							checkCertificateRevocation: false,
+							clientCertificateRequired: false
+					);
+				}
+				catch (System.ComponentModel.Win32Exception)
+				{
+					await DisposeAsync(false);
+					return false;
+				}
+				catch
+				{
+					throw;
+				}
+				
 				if (readTimeOut != null)
 				{
 					secureStream.ReadTimeout = readTimeOut.GetValueOrDefault();
 				}
-				;
-				await secureStream.AuthenticateAsServerAsync(cert, enabledSslProtocols: SslProtocols.Tls12, checkCertificateRevocation: false, clientCertificateRequired: false);
-				;
 				byte[] bytes = new byte[65536];
 				int i = await secureStream.ReadAsync(bytes, 0, bytes.Length);
-				bytes = SubArray(bytes, 0, i);
+				bytes = bytes.SubArray(0, i);
 
 				HandshakeMessage = GRequestHandler.ParseHeaders(bytes);
 
@@ -193,7 +167,10 @@ namespace EasyWebsockets
 					await secureStream.WriteAsync(res, 0, res.Length);
 				}
 				else
+				{
+					await DisposeAsync(false);
 					return false;
+				}
 			}
 			else
 			{
@@ -215,7 +192,10 @@ namespace EasyWebsockets
 					await stream.WriteAsync(res, 0, res.Length);
 				}
 				else
+				{
+					await DisposeAsync(false);
 					return false;
+				}
 			}
 			handShaked = true;
 			return true;
@@ -238,51 +218,7 @@ namespace EasyWebsockets
 			return Encoding.UTF8.GetBytes(msg);
 		}
 
-		private static Tuple<byte[], ushort?, ulong, WSOpcodeType>? ConvertFrame(byte[] frame)
-		{
-			bool fin = (frame[0] & 0b10000000) != 0;
-			bool mask = (frame[1] & 0b10000000) != 0;
-
-			if (!mask)
-			{
-				return null;
-			}
-
-			int opcode = frame[0] & 0b00001111;
-			ulong msgLen = (ulong)(frame[1] - 128);
-			int offset = 2;
-
-			if (msgLen == 126)
-			{
-				msgLen = (ulong)BitConverter.ToInt16(new byte[] { frame[3], frame[2] });
-				offset = 4;
-			}
-			else if (msgLen == 127)
-			{
-				msgLen = BitConverter.ToUInt64(new byte[] { frame[9], frame[8], frame[7], frame[6], frame[5], frame[4], frame[3], frame[2] });
-				offset = 6;
-			}
-
-			byte[] maskingKey = new byte[] { frame[offset], frame[offset + 1], frame[offset + 2], frame[offset + 3] };
-			offset += 4;
-
-			byte[] data = new byte[msgLen];
-			int m = 0;
-
-			for (int i = offset; i < frame.Length; i++)
-			{
-				data[m] = (byte)(frame[i] ^ maskingKey[m % 4]);
-				m++;
-			}
-
-			ushort? statusCode = null;
-			if (opcode == (int)WSOpcodeType.Close && msgLen > 125)
-			{
-				statusCode = BitConverter.ToUInt16(new byte[] { data[0], data[1] });
-			}
-
-			return new Tuple<byte[], ushort?, ulong, WSOpcodeType>(data, statusCode, msgLen, (WSOpcodeType)opcode);
-		}
+		
 		/// <summary>
 		/// Disposes the current object.
 		/// </summary>
@@ -291,25 +227,42 @@ namespace EasyWebsockets
 		{
 			if (disposed)
 				return;
+			disposed = true;
 			if (!closed)
 			{
 				closed = true;
-				await CloseAsync();
+				await CloseAsync(WebSocketCloseStatus.NormalClosure, "");
 			}
+			var stream = client.GetStream();
 			if (secure)
-				secureStream?.Dispose();
+				await secureStream.DisposeAsync();
 			else
-				client.GetStream().Dispose();
-
+				await stream.DisposeAsync();
 			client.Dispose();
-			disposed = true;
-
 		}
-		private static T[] SubArray<T>(T[] data, int index, int length)
+		/// <summary>
+		/// Disposes the current object.
+		/// </summary>
+		/// <param name="closeConnection">Close the connection if it is running.</param>
+		/// <returns>Returns the completed task.</returns>
+		public async ValueTask DisposeAsync(bool closeConnection)
 		{
-			T[] result = new T[length];
-			Array.Copy(data, index, result, 0, length);
-			return result;
+			if (disposed)
+				return;
+			disposed = true;
+			if (closeConnection && !closed)
+			{
+				closed = true;
+				await CloseAsync(WebSocketCloseStatus.NormalClosure, "");
+			}
+			
+			closed = true;
+			var stream = client.GetStream();
+			if (secure)
+				await secureStream.DisposeAsync();
+			else
+				await stream.DisposeAsync();
+			client.Dispose();
 		}
 	}
 }

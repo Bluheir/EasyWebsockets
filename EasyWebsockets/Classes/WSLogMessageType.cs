@@ -21,6 +21,10 @@
 		/// <summary>
 		/// Log message of a client that had an unclean disconnect.
 		/// </summary>
-		AbruptDisconnect
+		AbruptDisconnect,
+		/// <summary>
+		/// Server attempted to handshake client, but was unsuccessful.
+		/// </summary>
+		UnsuccessfulHandshake
 	}
 }

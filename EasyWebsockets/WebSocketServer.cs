@@ -10,6 +10,8 @@ using EasyWebsockets.Classes;
 using System.Security.Cryptography;
 using System.Text;
 using System.IO;
+using System.Security.Authentication;
+using System.Net.WebSockets;
 
 namespace EasyWebsockets
 {
@@ -17,12 +19,12 @@ namespace EasyWebsockets
 	{
 		private readonly Dictionary<WebSocketInstance, CancellationTokenSource> _clients;
 		private readonly TcpListener _listener;
-		private readonly X509Certificate2? cert;
+		private readonly TlsConfig? cert;
 		private readonly bool secure;
 		private readonly CancellationTokenSource token;
 
 		private Func<WebSocketInstance, Task>? onConnect = x => Task.CompletedTask;
-		private Func<WebSocketInstance, byte[]?, ushort?, Task>? onDisconnect = (x, y, z) => Task.CompletedTask;
+		private Func<WebSocketInstance, byte[]?, WebSocketCloseStatus, Task>? onDisconnect = (x, y, z) => Task.CompletedTask;
 		private Func<WebSocketInstance, byte[], WSOpcodeType, Task>? onReceive = (w, x, y) => Task.CompletedTask;
 		private Func<IWSLogMessage, Task>? log = x => Task.CompletedTask;
 
@@ -33,7 +35,7 @@ namespace EasyWebsockets
 		/// <summary>
 		/// The function to invoke when a client disconnects.
 		/// </summary>
-		public event Func<WebSocketInstance, byte[]?, ushort?, Task> OnDisconnect { add => onDisconnect += value; remove => onDisconnect -= value; }
+		public event Func<WebSocketInstance, byte[]?, WebSocketCloseStatus, Task> OnDisconnect { add => onDisconnect += value; remove => onDisconnect -= value; }
 		/// <summary>
 		/// The function to invoke when a client sends bytes with the Opcode type.
 		/// </summary>
@@ -52,23 +54,19 @@ namespace EasyWebsockets
 		/// Constructor with an <see cref="IPEndPoint"/>, certificate and password.
 		/// </summary>
 		/// <param name="endpoint">The <see cref="IPEndPoint"/> to listen on.</param>
-		/// <param name="certificate">The path of TLS certificate. If null, connections won't be tunneled over TLS.</param>
-		/// <param name="password">The password to access certificate.</param>
-		public WebSocketServer(IPEndPoint endpoint, string? certificate = null, string? password = null)
+		/// <param name="cert">The configuration for the TLS certificate. If null, connections won't be tunneled over TLS.</param>
+		public WebSocketServer(IPEndPoint endpoint, TlsConfig? cert)
 		{
 			_clients = new Dictionary<WebSocketInstance, CancellationTokenSource>();
 			_listener = new TcpListener(endpoint);
-			secure = certificate != null;
 
-			if (secure)
+			if (cert != null && cert.Certificate == null)
 			{
-				//Load certificate
-
-				if(password == null)
-					cert = new X509Certificate2(certificate);
-				else
-					cert = new X509Certificate2(certificate, password);
+				cert.LoadCertFromPfx();
 			}
+			secure = cert != null && cert.Certificate != null;
+
+			this.cert = cert;
 
 			Endpoint = endpoint;
 			token = new CancellationTokenSource();
@@ -79,17 +77,15 @@ namespace EasyWebsockets
 		/// </summary>
 		/// <param name="ip">The ip address to listen on.</param>
 		/// <param name="port">The port to listen on.</param>
-		/// <param name="certificate">The path of TLS certificate. If null, connections won't be tunneled over TLS.</param>
-		/// <param name="password">The password to access certificate.</param>
-		public WebSocketServer(IPAddress ip, int port, string? certificate = null, string? password = null) : this(new IPEndPoint(ip, port), certificate, password) { }
+		/// <param name="certificate">The configuration for the TLS certificate. If null, connections won't be tunneled over TLS.</param>
+		public WebSocketServer(IPAddress ip, int port, TlsConfig? cert = null) : this(new IPEndPoint(ip, port), cert) { }
 		/// <summary>
 		/// Constructor with a string ip address and int port, certificate file path, and password to certificate.
 		/// </summary>
 		/// <param name="ip">The string ip address to listen on.</param>
 		/// <param name="port">The port to listen on.</param>
-		/// <param name="certificate">The path of TLS certificate. If null, connections won't be tunneled over TLS.</param>
-		/// <param name="password">The password to access certificate.</param>
-		public WebSocketServer(string ip, int port, string? certificate = null, string? password = null) : this(IPAddress.Parse(ip), port, certificate, password) { }
+		/// <param name="cert">The configuration for the TLS certificate. If null, connections won't be tunneled over TLS.</param>
+		public WebSocketServer(string ip, int port, TlsConfig? cert = null) : this(IPAddress.Parse(ip), port, cert) { }
 
 		/// <summary>
 		/// Starts listening on the specified ip address and port.
@@ -104,9 +100,10 @@ namespace EasyWebsockets
 				{
 					while (true)
 					{
-						_ = HandleClientAsync(await _listener.AcceptTcpClientAsync());
+						var client = await _listener.AcceptTcpClientAsync();
 						if (log != null)
 							await log(new WSLogMessage("Client connected", DateTime.Now, Thread.CurrentThread.ManagedThreadId, "Connections", WSLogMessageType.Connect));
+						_ = HandleClientAsync(client);
 					}
 				}, token.Token);
 			}
@@ -124,7 +121,13 @@ namespace EasyWebsockets
 			var token = new CancellationTokenSource();
 			_clients.Add(client, token);
 
-			await client.HandShakeAsync();
+			if(!await client.HandShakeAsync())
+			{
+				_clients.Remove(client);
+				if(log != null)
+					await log(new WSLogMessage("Unsuccessful client handshake", DateTime.Now, Thread.CurrentThread.ManagedThreadId, "Receives", WSLogMessageType.UnsuccessfulHandshake));
+				return;
+			}
 
 			if (log != null)
 				await log(new WSLogMessage("Client handshaked", DateTime.Now, Thread.CurrentThread.ManagedThreadId, "Receives", WSLogMessageType.Handshake));
@@ -144,12 +147,12 @@ namespace EasyWebsockets
 							if (log != null)
 								await log(new WSLogMessage("Client abruptly disconnected", DateTime.Now, Thread.CurrentThread.ManagedThreadId, "Receives", WSLogMessageType.AbruptDisconnect));
 							if (onDisconnect != null)
-								await onDisconnect(client, null, null);
+								await onDisconnect(client, null, default);
 							break;
 						}
 						else if (t.Item3 == WSOpcodeType.Close)
 						{
-							await client.DisposeAsync();
+							_clients.Remove(client);
 							if (log != null)
 								await log(new WSLogMessage("Client disconnected", DateTime.Now, Thread.CurrentThread.ManagedThreadId, "Receives", WSLogMessageType.Disconnect));
 							if (onDisconnect != null)
@@ -164,45 +167,38 @@ namespace EasyWebsockets
 					}
 				}, token.Token);
 			}
+			///*
 			catch (TaskCanceledException)
 			{
 				await client.DisposeAsync();
+				_clients.Remove(client);
 				if (log != null)
 					await log(new WSLogMessage("Client disconnected", DateTime.Now, Thread.CurrentThread.ManagedThreadId, "Receives", WSLogMessageType.Disconnect));
 				if (onDisconnect != null)
-					await onDisconnect(client, null, null);
+					await onDisconnect(client, null, default);
 			}
-			catch (SocketException e) when (e.SocketErrorCode == SocketError.ConnectionAborted)
+			catch(IndexOutOfRangeException)
 			{
 				await client.DisposeAsync();
+				_clients.Remove(client);
 				if (log != null)
 					await log(new WSLogMessage("Client abruptly disconnected", DateTime.Now, Thread.CurrentThread.ManagedThreadId, "Receives", WSLogMessageType.AbruptDisconnect));
 				if (onDisconnect != null)
-					await onDisconnect(client, null, null);
+					await onDisconnect(client, null, default);
 			}
-		}
-		private static X509Certificate2 LoadCertificate(string filePath)
-		{
-			var pem = System.IO.File.ReadAllText(filePath);
-			byte[] certBuffer = GetBytesFromPEM(pem, "CERTIFICATE");
-			return new X509Certificate2(certBuffer);
-		}
-		private static byte[] GetBytesFromPEM(string pemString, string section)
-		{
-			var header = string.Format("-----BEGIN {0}-----", section);
-			var footer = string.Format("-----END {0}-----", section);
-
-			var start = pemString.IndexOf(header, StringComparison.Ordinal);
-			if (start < 0)
-				return null;
-
-			start += header.Length;
-			var end = pemString.IndexOf(footer, start, StringComparison.Ordinal) - start;
-
-			if (end < 0)
-				return null;
-
-			return Convert.FromBase64String(pemString.Substring(start, end));
+			catch (SocketException)
+			{
+				await client.DisposeAsync(false);
+				if (log != null)
+					await log(new WSLogMessage("Client abruptly disconnected", DateTime.Now, Thread.CurrentThread.ManagedThreadId, "Receives", WSLogMessageType.AbruptDisconnect));
+				if (onDisconnect != null)
+					await onDisconnect(client, null, default);
+			}
+			//*/
+			catch
+			{
+				throw;
+			}
 		}
 
 		/// <summary>

@@ -11,15 +11,23 @@ namespace EasyWebsockets.Helpers
 		private readonly Dictionary<string, string> startHeaders;
 		private readonly Dictionary<string, string> headers;
 
+		/// <summary>
+		/// The start headers of the HTTP request, such as method, version, target, and path.
+		/// </summary>
 		public IReadOnlyDictionary<string, string> StartHeaders => startHeaders;
+		/// <summary>
+		/// The additional headers of the HTTP request.
+		/// </summary>
 		public IReadOnlyDictionary<string, string> Headers => headers;
 
+		/// <summary>
+		/// The main constructor.
+		/// </summary>
 		public GRequestHandler()
 		{
 			startHeaders = new Dictionary<string, string>();
 			headers = new Dictionary<string, string>();
 		}
-
 
 		public void OnHeader(Span<byte> name, Span<byte> value)
 		{

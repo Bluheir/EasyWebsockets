@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using System.Net.WebSockets;
 using System.Threading;
 using System.Text;
+using System.Security.Authentication;
 
 namespace EasyWebsockets.ClientExample
 {
@@ -18,7 +19,7 @@ namespace EasyWebsockets.ClientExample
 
 		public async Task MainAsync()
 		{
-			await client.ConnectAsync(new Uri("wss://coolwebsocket.tk"), new CancellationToken());
+			await client.ConnectAsync(new Uri("wss://127.0.0.1"), new CancellationToken());
 			Console.WriteLine("connected");
 			while (true)
 			{
