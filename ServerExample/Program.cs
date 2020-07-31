@@ -53,7 +53,7 @@ namespace ServerExample
 
 		private async Task OnConnect(WebSocketInstance arg)
 		{
-			await arg.SendAsync(Encoding.UTF8.GetBytes("NIGGER"), WSOpcodeType.Text);
+			await arg.SendAsync(Encoding.UTF8.GetBytes("Neeshko"), WSOpcodeType.Text);
 		}
 	}
 }
