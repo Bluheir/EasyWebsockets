@@ -17,15 +17,15 @@ namespace ServerExample
 
 		private async Task MainAsync()
 		{
-			var config = new TlsConfig(
+			var config = new WSServerConfig(
 				mainkey: "C:/Users/User/Desktop/cert1.pfx",
 				privkey: "C:/Certbot/live/socket.gg/privkey.pem",
-				version: SslProtocols.Tls13 | SslProtocols.Tls12 | SslProtocols.Tls
+				version: SslProtocols.Tls13 | SslProtocols.Tls12
 			);
 
 			config.LoadCertFromPfx();
 
-			server = new WebSocketServer("192.168.2.165", 25565, config);
+			server = new WebSocketServer("192.168.1.107", 443, config);
 
 			server.OnConnect += OnConnect; ;
 			server.OnReceive += OnReceive; ;

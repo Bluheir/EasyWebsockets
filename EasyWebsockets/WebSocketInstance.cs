@@ -8,19 +8,47 @@ using EasyWebsockets.Helpers;
 using EasyWebsockets.Classes;
 using System.Net.WebSockets;
 using System.Threading;
+using System.IO;
 
 namespace EasyWebsockets
 {
+	/// <summary>
+	/// Represents an instance of an upgraded WebSocket connection.
+	/// </summary>
 	public class WebSocketInstance : IAsyncDisposable
 	{
-		private readonly TlsConfig? cert;
-		private readonly TcpClient client;
+		private WSServerConfig? config;
+		private TcpClient client;
 		private readonly int? readTimeOut;
 		private SslStream? secureStream;
-		private readonly bool secure;
+		private bool secure;
 		private bool handShaked;
 		private bool closed;
 		private bool disposed;
+
+		/// <summary>
+		/// To be used internally OR when extending <seealso cref="GWebSocketServer{T}"/> or <seealso cref="WebSocketServer"/>
+		/// </summary>
+		public TcpClient Client { 
+			set 
+			{
+				if (client == null)
+					client = value;
+			} 
+		}
+		/// <summary>
+		/// To be used internally OR when extending <seealso cref="GWebSocketServer{T}"/> or <seealso cref="WebSocketServer"/>
+		/// </summary>
+		public WSServerConfig? Config {
+			set
+			{
+				if (config == null)
+				{
+					config = value;
+					secure = config.Certificate != null;
+				}
+			}
+		}
 
 		/// <summary>
 		/// The handshake message the client sent.
@@ -32,25 +60,32 @@ namespace EasyWebsockets
 		public string? SecWebSocketKey { get; private set; }
 
 		/// <summary>
-		/// Default constructor with a client to be upgraded, timeout for receiving, and certificate.
+		/// The default constructor for upgrading a <seealso cref="TcpClient"/> to a WebSocket connection.
 		/// </summary>
-		/// <param name="client">The <see cref="TcpClient"/> to be upgraded to a websocket connection.</param>
-		/// <param name="timeout">The timeout for receiving messages.</param>
-		/// <param name="cert">The X509 certificate for secure connections.</param>
-		public WebSocketInstance(TcpClient client, int? timeout = null, TlsConfig? cert = null)
+		/// <param name="client">The <seealso cref="TcpClient"/> to be upgraded.</param>
+		/// <param name="timeout">The timeout number.</param>
+		/// <param name="config">The config for the client.</param>
+		public WebSocketInstance(TcpClient client, int? timeout = null, WSServerConfig? config = null)
 		{
-			this.client = client;
-			this.secure = cert != null && cert.Certificate != null;
-			this.cert = cert;
+			Client = client;
+			Config = config;
 			readTimeOut = timeout;
 		}
 		/// <summary>
+		/// To be used internally OR when extending <seealso cref="GWebSocketServer{T}"/> or <seealso cref="WebSocketServer"/>
+		/// </summary>
+		public WebSocketInstance()
+		{
+			
+		}
+
+		/// <summary>
 		/// Sends a WebSocket frame to the client.
 		/// </summary>
-		/// <param name="data">The data to be sent.</param>
+		/// <param name="dt">The data to be sent.</param>
 		/// <param name="msgType">The type of message sent.</param>
 		/// <returns>Completed Task</returns>
-		public virtual async Task SendAsync(byte[] data, WSOpcodeType msgType)
+		public virtual async Task SendAsync(ArraySegment<byte> dt, WSOpcodeType msgType)
 		{
 			if (!handShaked)
 				return;
@@ -58,6 +93,7 @@ namespace EasyWebsockets
 				return;
 			if (closed)
 				return;
+			var data = dt.Array.SubArray(dt.Offset, dt.Count);
 			//if (data.Array == null)
 				//throw new ArgumentNullException($"Inner array of argument \"{nameof(data)}\" cannot be equal to null.");
 			byte[] d = WSArrayHelpers.ToFrameData(data, msgType);
@@ -76,7 +112,7 @@ namespace EasyWebsockets
 		/// Receives a WebSocket packet from the client.
 		/// </summary>
 		/// <returns>Returns the external data, the status code of closing the connection (if there is one) and the opcode type of the message.</returns>
-		public async Task<Tuple<byte[], WebSocketCloseStatus, WSOpcodeType>?> ReceiveAsync()
+		public virtual async Task<Tuple<byte[], WebSocketCloseStatus, WSOpcodeType>?> ReceiveAsync()
 		{
 			if (!handShaked)
 				return null;
@@ -85,7 +121,16 @@ namespace EasyWebsockets
 			if (closed)
 				return null;
 
-			byte[] data = new byte[65535];
+			uint buff = 0;
+
+			if (config.BufferSize != null)
+				buff = config.BufferSize.GetValueOrDefault();
+			else if (config.DynamicBufferSize != null)
+				buff = await config.DynamicBufferSize(this);
+			else
+				buff = 65535;
+
+			byte[] data = new byte[buff];
 			if (secure)
 			{
 				int i = await secureStream.ReadAsync(data, 0, data.Length);
@@ -134,15 +179,20 @@ namespace EasyWebsockets
 				try
 				{
 					await secureStream.AuthenticateAsServerAsync(
-							cert.Certificate,
-							enabledSslProtocols: cert.SslVersion,
+							config.Certificate,
+							enabledSslProtocols: config.SslVersion,
 							checkCertificateRevocation: false,
 							clientCertificateRequired: false
 					);
 				}
 				catch (System.ComponentModel.Win32Exception)
 				{
-					await DisposeAsync(false);
+					await DisposeAsync(false, true);
+					return false;
+				}
+				catch(IOException)
+				{
+					await DisposeAsync(false, true);
 					return false;
 				}
 				catch
@@ -150,12 +200,15 @@ namespace EasyWebsockets
 					throw;
 				}
 				
+				byte[] bytes = new byte[65536];
+				secureStream.ReadTimeout = 5000;
+				
+				int i = await secureStream.ReadAsync(bytes, 0, bytes.Length);
+				
 				if (readTimeOut != null)
 				{
 					secureStream.ReadTimeout = readTimeOut.GetValueOrDefault();
 				}
-				byte[] bytes = new byte[65536];
-				int i = await secureStream.ReadAsync(bytes, 0, bytes.Length);
 				bytes = bytes.SubArray(0, i);
 
 				HandshakeMessage = GRequestHandler.ParseHeaders(bytes);
@@ -174,14 +227,15 @@ namespace EasyWebsockets
 			}
 			else
 			{
+				byte[] bytes = new byte[65536];
+				stream.ReadTimeout = 5000;
+				int i = await stream.ReadAsync(bytes, 0, bytes.Length);
+
 				if (readTimeOut != null)
 				{
 					stream.ReadTimeout = readTimeOut.GetValueOrDefault();
 				}
-				while (client.Available < 3) { }
-				byte[] bytes = new byte[client.Available];
-
-				await stream.ReadAsync(bytes, 0, bytes.Length);
+				bytes = bytes.SubArray(0, i);
 
 				HandshakeMessage = GRequestHandler.ParseHeaders(bytes);
 
@@ -218,7 +272,6 @@ namespace EasyWebsockets
 			return Encoding.UTF8.GetBytes(msg);
 		}
 
-		
 		/// <summary>
 		/// Disposes the current object.
 		/// </summary>
@@ -244,8 +297,9 @@ namespace EasyWebsockets
 		/// Disposes the current object.
 		/// </summary>
 		/// <param name="closeConnection">Close the connection if it is running.</param>
+		/// <param name="closed">If the connection is closed.</param>
 		/// <returns>Returns the completed task.</returns>
-		public async ValueTask DisposeAsync(bool closeConnection)
+		public async ValueTask DisposeAsync(bool closeConnection, bool closed = false)
 		{
 			if (disposed)
 				return;
@@ -257,12 +311,15 @@ namespace EasyWebsockets
 			}
 			
 			closed = true;
-			var stream = client.GetStream();
-			if (secure)
+			NetworkStream? stream = null;
+			if(!closed)
+				stream = client.GetStream();
+			if (secure && !closed)
 				await secureStream.DisposeAsync();
-			else
+			else if(!closed)
 				await stream.DisposeAsync();
-			client.Dispose();
+			else if(!closed)
+				client.Dispose();
 		}
 	}
 }

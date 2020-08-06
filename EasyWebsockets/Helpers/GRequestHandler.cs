@@ -6,6 +6,9 @@ using System.Text;
 
 namespace EasyWebsockets.Helpers
 {
+	/// <summary>
+	/// Reperesents a parser for HTTP headers. Mainly used for parsing handshake message from WebSocket client.
+	/// </summary>
 	public class GRequestHandler : IHttpHeadersHandler, IHttpRequestLineHandler
 	{
 		private readonly Dictionary<string, string> startHeaders;

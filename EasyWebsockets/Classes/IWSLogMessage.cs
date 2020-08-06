@@ -2,6 +2,9 @@
 
 namespace EasyWebsockets.Classes
 {
+	/// <summary>
+	/// Represents a log message.
+	/// </summary>
 	public interface IWSLogMessage
 	{
 		/// <summary>

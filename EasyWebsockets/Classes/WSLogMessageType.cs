@@ -1,5 +1,8 @@
 ﻿namespace EasyWebsockets.Classes
 {
+	/// <summary>
+	/// Represents a specific type of WebSocket log message
+	/// </summary>
 	public enum WSLogMessageType : byte
 	{
 		/// <summary>

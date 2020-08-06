@@ -8,6 +8,18 @@
     <RepositoryUrl>https://github.com/Bluheir/EasyWebsockets/</RepositoryUrl>
     <RepositoryType>github</RepositoryType>
     <PackageTags>websocket server, websocketeasy, easywebsocket, websocket async, tcp, websocket, websockets, async websocket, asyncwebsocket, async easywebsockets</PackageTags>
+    <PackageId>EasyWebsocketServer</PackageId>
+    <Authors>ChrisIsFun</Authors>
+    <Company />
+    <Product>EasyWebsocketServer</Product>
+    <Version>1.0.0.1</Version>
+    <PackageReleaseNotes>Added XML documentation.</PackageReleaseNotes>
+    <PackageProjectUrl>https://github.com/Bluheir/EasyWebsockets/</PackageProjectUrl>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <DocumentationFile>C:\Users\User\Desktop\EasyWebsockets\EasyWebsockets\EasyWebsockets.xml</DocumentationFile>
+    <WarningLevel>0</WarningLevel>
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,5 +1,8 @@
 ﻿namespace EasyWebsockets.Classes
 {
+	/// <summary>
+	/// Represents an opcode of a WebSocket frame.
+	/// </summary>
 	public enum WSOpcodeType : byte
 	{
 		/// <summary>
