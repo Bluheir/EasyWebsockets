@@ -28,6 +28,10 @@
 		/// <summary>
 		/// Server attempted to handshake client, but was unsuccessful.
 		/// </summary>
-		UnsuccessfulHandshake
+		UnsuccessfulHandshake,
+		/// <summary>
+		/// Server thread was closed.
+		/// </summary>
+		ServerClose
 	}
 }

@@ -20,11 +20,11 @@ namespace EasyWebsockets
 		private WSServerConfig? config;
 		private TcpClient client;
 		private readonly int? readTimeOut;
-		private SslStream? secureStream;
+		private Stream? stream;
 		private bool secure;
-		private bool handShaked;
-		private bool closed;
 		private bool disposed;
+
+		public WebSocketState SocketState { get; set; } = WebSocketState.Connecting;
 
 		/// <summary>
 		/// To be used internally OR when extending <seealso cref="GWebSocketServer{T}"/> or <seealso cref="WebSocketServer"/>
@@ -36,6 +36,7 @@ namespace EasyWebsockets
 					client = value;
 			} 
 		}
+
 		/// <summary>
 		/// To be used internally OR when extending <seealso cref="GWebSocketServer{T}"/> or <seealso cref="WebSocketServer"/>
 		/// </summary>
@@ -54,6 +55,7 @@ namespace EasyWebsockets
 		/// The handshake message the client sent.
 		/// </summary>
 		public GRequestHandler? HandshakeMessage { get; private set; }
+
 		/// <summary>
 		/// The Sec-WebSocket-Key in the original handshake.
 		/// </summary>
@@ -71,6 +73,7 @@ namespace EasyWebsockets
 			Config = config;
 			readTimeOut = timeout;
 		}
+
 		/// <summary>
 		/// To be used internally OR when extending <seealso cref="GWebSocketServer{T}"/> or <seealso cref="WebSocketServer"/>
 		/// </summary>
@@ -87,25 +90,32 @@ namespace EasyWebsockets
 		/// <returns>Completed Task</returns>
 		public virtual async Task SendAsync(ArraySegment<byte> dt, WSOpcodeType msgType)
 		{
-			if (!handShaked)
+			if (SocketState == WebSocketState.Closed ||
+				SocketState == WebSocketState.Aborted ||
+				SocketState == WebSocketState.CloseSent ||
+				SocketState == WebSocketState.None ||
+				SocketState == WebSocketState.Connecting)
 				return;
 			if (disposed)
 				return;
-			if (closed)
-				return;
+
 			var data = dt.Array.SubArray(dt.Offset, dt.Count);
-			//if (data.Array == null)
-				//throw new ArgumentNullException($"Inner array of argument \"{nameof(data)}\" cannot be equal to null.");
+
 			byte[] d = WSArrayHelpers.ToFrameData(data, msgType);
 
-			if (secure)
-				await secureStream.WriteAsync(d, 0, d.Length);
-			else
-				await client.GetStream().WriteAsync(d, 0, d.Length);
+			await stream.WriteAsync(d, 0, d.Length);
 
 			if(msgType == WSOpcodeType.Close && !disposed)
 			{
-				await DisposeAsync();
+				if(SocketState == WebSocketState.Open)
+				{
+					SocketState = WebSocketState.CloseSent; // Close request is sent to websocket
+				}
+				else if(SocketState == WebSocketState.CloseReceived)
+				{
+					await DisposeAsync(); // Close request was sent back to client, dispose the client now
+					SocketState = WebSocketState.Closed; // Set state
+				}
 			}
 		}
 		/// <summary>
@@ -114,11 +124,13 @@ namespace EasyWebsockets
 		/// <returns>Returns the external data, the status code of closing the connection (if there is one) and the opcode type of the message.</returns>
 		public virtual async Task<Tuple<byte[], WebSocketCloseStatus, WSOpcodeType>?> ReceiveAsync()
 		{
-			if (!handShaked)
+			if (SocketState == WebSocketState.Closed || 
+				SocketState == WebSocketState.CloseReceived || 
+				SocketState == WebSocketState.Aborted || 
+				SocketState == WebSocketState.None || 
+				SocketState == WebSocketState.Connecting)
 				return null;
 			if (disposed)
-				return null;
-			if (closed)
 				return null;
 
 			uint buff = 0;
@@ -131,49 +143,88 @@ namespace EasyWebsockets
 				buff = 65535;
 
 			byte[] data = new byte[buff];
-			if (secure)
-			{
-				int i = await secureStream.ReadAsync(data, 0, data.Length);
-				data = data.SubArray(0, i);
-			}
-			else
-			{
-				int i = await client.GetStream().ReadAsync(data, 0, data.Length);
-				data = data.SubArray(0, i);
-			}
-			;
-			var t = WSArrayHelpers.ConvertFrame(data);
 
+			int i = await stream.ReadAsync(data, 0, data.Length);
+			data = data.SubArray(0, i);
+
+			var t = WSArrayHelpers.ConvertFrame(data);
 			if (t == null)
+			{
+				
+				await DisposeAsync(true);
+				return null;
+			}
+
+			if(t.Item4 != WSOpcodeType.Close && t.Item4 != WSOpcodeType.Ping && t.Item4 != WSOpcodeType.Pong && SocketState == WebSocketState.CloseSent)
 			{
 				await DisposeAsync();
 				return null;
 			}
-			if(t.Item4 == WSOpcodeType.Close)
+
+			if (t.Item4 == WSOpcodeType.Close)
 			{
-				await CloseAsync(WebSocketCloseStatus.Empty, null);
-				await DisposeAsync(false);
+				if(SocketState == WebSocketState.Open)
+				{
+					SocketState = WebSocketState.CloseReceived;
+					await SendAsync(new ArraySegment<byte>(t.Item1), WSOpcodeType.Close);
+					await DisposeAsync();
+
+					SocketState = WebSocketState.Closed;
+				}
+				else if(SocketState == WebSocketState.CloseSent)
+				{
+					Console.WriteLine("yeah, got it matee");
+					await DisposeAsync();
+					SocketState = WebSocketState.Closed;
+				}
 			}
+
 			return new Tuple<byte[], WebSocketCloseStatus, WSOpcodeType>(t.Item1, t.Item2, t.Item4);
 		}
 		
-		public virtual Task CloseAsync(WebSocketCloseStatus closeStatus, string? statusDescription)
+		/// <summary>
+		/// Closes the websocket connection
+		/// </summary>
+		/// <param name="closeStatus">Close status</param>
+		/// <param name="statusDescription">Optional status description</param>
+		/// <returns>The completed task.</returns>
+		public Task CloseAsync(WebSocketCloseStatus closeStatus, string? statusDescription = null)
 		{
 			return SendAsync(BitConverter.GetBytes((ushort)closeStatus).Join(Encoding.UTF8.GetBytes(statusDescription ?? "")), WSOpcodeType.Close);
 		}
+
+		/// <summary>
+		/// Sends a ping packet to the client
+		/// </summary>
+		/// <returns>The completed task.</returns>
+		public Task PingAsync()
+		{
+			return SendAsync(new ArraySegment<byte>(new byte[0]), WSOpcodeType.Ping);
+		}
+		/// <summary>
+		/// Sends a pong packet to the client
+		/// </summary>
+		/// <returns>The completed task.</returns>
+		public Task PongAsync()
+		{
+			return SendAsync(new ArraySegment<byte>(new byte[0]), WSOpcodeType.Pong);
+		}
+
 		/// <summary>
 		/// Initiates a handshake with the TCP client.
 		/// </summary>
 		/// <returns>Returns if the handshake was successful or not.</returns>
 		public virtual async Task<bool> HandShakeAsync()
 		{
-			if (handShaked)
+			if (SocketState != WebSocketState.Connecting)
 				return false;
-			var stream = client.GetStream();
+
+			var tcpStream = client.GetStream();
 
 			if (secure)
 			{
-				secureStream = new SslStream(stream, false);
+				var secureStream = new SslStream(tcpStream, false);
+				stream = secureStream;
 
 
 				try
@@ -187,74 +238,68 @@ namespace EasyWebsockets
 				}
 				catch (System.ComponentModel.Win32Exception)
 				{
-					await DisposeAsync(false, true);
+					await DisposeAsync(true);
 					return false;
 				}
 				catch(IOException)
 				{
-					await DisposeAsync(false, true);
+					await DisposeAsync(true);
 					return false;
 				}
 				catch
 				{
 					throw;
 				}
-				
-				byte[] bytes = new byte[65536];
-				secureStream.ReadTimeout = 5000;
-				
-				int i = await secureStream.ReadAsync(bytes, 0, bytes.Length);
-				
-				if (readTimeOut != null)
-				{
-					secureStream.ReadTimeout = readTimeOut.GetValueOrDefault();
-				}
-				bytes = bytes.SubArray(0, i);
-
-				HandshakeMessage = GRequestHandler.ParseHeaders(bytes);
-
-				if (HandshakeMessage.StartHeaders["method"].ToLower() == "get")
-				{
-					SecWebSocketKey = HandshakeMessage.Headers["Sec-WebSocket-Key"];
-					byte[] res = CreateHandShakeResponse();
-					await secureStream.WriteAsync(res, 0, res.Length);
-				}
-				else
-				{
-					await DisposeAsync(false);
-					return false;
-				}
 			}
 			else
 			{
-				byte[] bytes = new byte[65536];
-				stream.ReadTimeout = 5000;
-				int i = await stream.ReadAsync(bytes, 0, bytes.Length);
+				stream = tcpStream;
 
-				if (readTimeOut != null)
-				{
-					stream.ReadTimeout = readTimeOut.GetValueOrDefault();
-				}
-				bytes = bytes.SubArray(0, i);
-
-				HandshakeMessage = GRequestHandler.ParseHeaders(bytes);
-
-				if (HandshakeMessage.StartHeaders["method"].ToLower() == "get")
-				{
-					SecWebSocketKey = HandshakeMessage.Headers["Sec-WebSocket-Key"];
-					byte[] res = CreateHandShakeResponse();
-					await stream.WriteAsync(res, 0, res.Length);
-				}
-				else
-				{
-					await DisposeAsync(false);
-					return false;
-				}
 			}
-			handShaked = true;
+
+			byte[] bytes = new byte[65536];
+			stream.ReadTimeout = 10000;
+
+			int i = await stream.ReadAsync(bytes, 0, bytes.Length);
+
+			stream.ReadTimeout = -1;
+			bytes = bytes.SubArray(0, i);
+
+			var text = Encoding.UTF8.GetString(bytes);
+
+			if(String.IsNullOrWhiteSpace(text))
+			{
+				await DisposeAsync(true);
+				return false;
+			}
+
+			HandshakeMessage = GRequestHandler.ParseHeaders(bytes);
+
 			return true;
 		}
-		private byte[] CreateHandShakeResponse()
+
+		/// <summary>
+		/// Makes the server send a websocket handshake response
+		/// </summary>
+		/// <returns>If successful</returns>
+		public virtual async Task<bool> FinalizeHandShakeAsync()
+		{
+			if (HandshakeMessage.StartHeaders["method"].ToLower() == "get")
+			{
+				SecWebSocketKey = HandshakeMessage.Headers["Sec-WebSocket-Key"];
+				byte[] res = CreateHandShakeResponse();
+				await stream.WriteAsync(res, 0, res.Length);
+
+				SocketState = WebSocketState.Open; // The handshake is finalized.
+				return true;
+			}
+			else
+			{
+				await DisposeAsync(false);
+				return false;
+			}
+		}
+		public byte[] CreateHandShakeResponse()
 		{
 			const string eol = "\r\n";
 
@@ -273,53 +318,33 @@ namespace EasyWebsockets
 		}
 
 		/// <summary>
-		/// Disposes the current object.
+		/// Disposes this object asynchronously
 		/// </summary>
-		/// <returns>Returns the completed task.</returns>
-		public async ValueTask DisposeAsync()
+		/// <returns>The completed task.</returns>
+		public ValueTask DisposeAsync()
 		{
-			if (disposed)
-				return;
-			disposed = true;
-			if (!closed)
-			{
-				closed = true;
-				await CloseAsync(WebSocketCloseStatus.NormalClosure, "");
-			}
-			var stream = client.GetStream();
-			if (secure)
-				await secureStream.DisposeAsync();
-			else
-				await stream.DisposeAsync();
-			client.Dispose();
+			return DisposeAsync(false);
 		}
+
 		/// <summary>
-		/// Disposes the current object.
+		/// Disposes the current object and sends a close frame. To be used in response to a close request from the client.
 		/// </summary>
-		/// <param name="closeConnection">Close the connection if it is running.</param>
-		/// <param name="closed">If the connection is closed.</param>
+		/// <param name="aborted">If the connection was aborted</param>
 		/// <returns>Returns the completed task.</returns>
-		public async ValueTask DisposeAsync(bool closeConnection, bool closed = false)
+		public async ValueTask DisposeAsync(bool aborted)
 		{
 			if (disposed)
 				return;
 			disposed = true;
-			if (closeConnection && !closed)
-			{
-				closed = true;
-				await CloseAsync(WebSocketCloseStatus.NormalClosure, "");
-			}
-			
-			closed = true;
-			NetworkStream? stream = null;
-			if(!closed)
-				stream = client.GetStream();
-			if (secure && !closed)
-				await secureStream.DisposeAsync();
-			else if(!closed)
-				await stream.DisposeAsync();
-			else if(!closed)
-				client.Dispose();
+
+			if (SocketState == WebSocketState.Aborted ||
+				SocketState == WebSocketState.None)
+				return;
+
+			if (aborted)
+				SocketState = WebSocketState.Aborted;
+
+			client.Close();
 		}
 	}
 }

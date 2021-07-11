@@ -18,21 +18,27 @@ namespace ServerExample
 		private async Task MainAsync()
 		{
 			var config = new WSServerConfig(
-				mainkey: "C:/Users/User/Desktop/cert1.pfx",
-				privkey: "C:/Certbot/live/socket.gg/privkey.pem",
+				mainkey: null,
 				version: SslProtocols.Tls13 | SslProtocols.Tls12
 			);
 
-			config.LoadCertFromPfx();
+			config.BufferSize = 65535;
 
-			server = new WebSocketServer("192.168.1.107", 443, config);
+			//config.LoadCertFromPfx("corey is cool 123 321");
 
-			server.OnConnect += OnConnect; ;
+			server = new WebSocketServer("192.168.1.111", 80, config);
+
+			server.OnClientHandshake += OnConnect; ;
+			server.OnDisconnect += ClientDisconnect;
 			server.OnReceive += OnReceive; ;
 			server.Log += OnLog;
 
 			await server.StartAsync();
 			await Task.Delay(-1);
+		}
+
+		private async Task ClientDisconnect(WebSocketInstance arg1, byte[] arg2, System.Net.WebSockets.WebSocketCloseStatus arg3)
+		{
 		}
 
 		private Task OnLog(IWSLogMessage arg)
@@ -42,18 +48,21 @@ namespace ServerExample
 			return Task.CompletedTask;
 		}
 
-		private Task OnReceive(WebSocketInstance arg1, byte[] arg2, WSOpcodeType arg3)
+		private async Task OnReceive(WebSocketInstance arg1, byte[] arg2, WSOpcodeType arg3)
 		{
 			if (arg3 == WSOpcodeType.Text)
 			{
 				Console.WriteLine(Encoding.UTF8.GetString(arg2));
 			}
-			return Task.CompletedTask;
+
+
 		}
 
 		private async Task OnConnect(WebSocketInstance arg)
 		{
 			await arg.SendAsync(Encoding.UTF8.GetBytes("Neeshko"), WSOpcodeType.Text);
+
+			await arg.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "yeah mate");
 		}
 	}
 }

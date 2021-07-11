@@ -12,13 +12,13 @@
     <Authors>ChrisIsFun</Authors>
     <Company />
     <Product>EasyWebsocketServer</Product>
-    <Version>1.0.0.1</Version>
-    <PackageReleaseNotes>Added XML documentation.</PackageReleaseNotes>
+    <Version>1.1</Version>
+    <PackageReleaseNotes>Changed a few issues with the classes.</PackageReleaseNotes>
     <PackageProjectUrl>https://github.com/Bluheir/EasyWebsockets/</PackageProjectUrl>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-    <DocumentationFile>C:\Users\User\Desktop\EasyWebsockets\EasyWebsockets\EasyWebsockets.xml</DocumentationFile>
+    <DocumentationFile>C:\Users\slimc\source\repos\EasyWebSockets\EasyWebSockets\EasyWebSockets.xml</DocumentationFile>
     <WarningLevel>0</WarningLevel>
   </PropertyGroup>
 

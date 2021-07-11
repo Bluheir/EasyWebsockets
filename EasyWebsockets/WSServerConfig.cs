@@ -17,10 +17,6 @@ namespace EasyWebsockets
 		private bool disposed;
 
 		/// <summary>
-		/// The password of the certificate file.
-		/// </summary>
-		public string? Password { get; set; }
-		/// <summary>
 		/// The private certificate private key file path.
 		/// </summary>
 		public string? PrivKeyPath { get; }
@@ -35,7 +31,7 @@ namespace EasyWebsockets
 		/// <summary>
 		/// The X509Certificate loaded.
 		/// </summary>
-		public X509Certificate2? Certificate { get; private set; }
+		public X509Certificate2? Certificate { internal get; set; }
 		/// <summary>
 		/// The buffer size for packets. If null, dynamic buffer size will be used.
 		/// </summary>
@@ -63,14 +59,14 @@ namespace EasyWebsockets
 		/// Sets the value of <see cref="Certificate"/> to the PFX file loaded.
 		/// </summary>
 		/// <returns>The current instance.</returns>
-		public WSServerConfig LoadCertFromPfx()
+		public WSServerConfig LoadCertFromPfx(string? passwordToPfx)
 		{
 			if (Certificate != null)
 				return this;
-			if (Password == null || Password == "")
+			if (passwordToPfx == null || passwordToPfx == "")
 				Certificate = new X509Certificate2(MainKeyPath);
 			else
-				Certificate = new X509Certificate2(MainKeyPath, Password);
+				Certificate = new X509Certificate2(MainKeyPath, passwordToPfx);
 
 			return this;
 		}

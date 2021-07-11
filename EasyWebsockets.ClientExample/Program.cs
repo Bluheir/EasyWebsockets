@@ -19,11 +19,20 @@ namespace EasyWebsockets.ClientExample
 
 		public async Task MainAsync()
 		{
-			await client.ConnectAsync(new Uri("wss://127.0.0.1"), new CancellationToken());
+			await client.ConnectAsync(new Uri("ws://192.168.1.111"), new CancellationToken());
 			Console.WriteLine("connected");
 			while (true)
 			{
 				string t = Console.ReadLine();
+				if(client.State == WebSocketState.Closed)
+				{
+					Console.WriteLine("server closed connection");
+				}
+				if(t == "close")
+				{
+					await client.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
+					break;
+				}
 				byte[] b = Encoding.UTF8.GetBytes(t);
 				await client.SendAsync(new ArraySegment<byte>(b), WebSocketMessageType.Text, true, new CancellationToken());
 			}
